@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - master
+      - release-*
+    paths:
+      - VERSION
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SEMVER_PATTERN: '^([0-9]+)\.([0-9]+)\.([0-9]+)(-rc\.([0-9]+))?$'
+
+jobs:
+  push_tag:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Check whether version matches semver pattern
+        run: |
+          VERSION=$(cat VERSION)
+          if [[ ${VERSION} =~ ${{ env.SEMVER_PATTERN }} ]]; then
+            echo "Version '${VERSION}' matches semver pattern."
+          else
+            echo "Version '${VERSION}' does not match semver pattern."
+            exit 1
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Create and push tag
+        run: |
+          TAG="v${VERSION}"
+          git tag -a ${TAG} -m "Release v${VERSION}"
+          git push origin ${TAG}
+
+  draft_relase:
+    needs:
+      - push_tag
+
+    permissions:
+      contents: write
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Read version from VERSION file
+        run: |
+          VERSION=$(cat VERSION)
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Build Arena installer tarball
+        run: |
+          make build-pkg OS=linux ARCH=amd64
+          make build-pkg OS=linux ARCH=arm64
+          make build-pkg OS=darwin ARCH=amd64
+          make build-pkg OS=darwin ARCH=arm64
+
+      - name: Release
+        id: release
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: "Arena ${{ env.VERSION }}"
+          tag_name: ${{ env.VERSION }}
+          prerelease: ${{ contains(env.VERSION, 'rc') }}
+          target_commitish: ${{ github.sha }}
+          draft: true
+          files: |
+            *.tgz
+            *.tar.gz

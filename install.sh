@@ -14,11 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -e
+set -ex
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink "$0" || echo "$0")")"; pwd)"
 HELM_OPTIONS=""
-CRD_DIRS=""
 
 function help() {
     echo -e "
@@ -140,28 +139,15 @@ function custom_charts() {
 
 # install arena command tool and charts
 function install_arena_and_charts() {
-    now=$(date "+%Y%m%d%H%M%S")
-    if [ -f "/usr/local/bin/arena" ]; then
-        ${sudo_prefix} cp /usr/local/bin/arena /usr/local/bin/arena-$now
-    fi
     ${sudo_prefix} cp $SCRIPT_DIR/bin/arena /usr/local/bin/arena
-    if [ -f /usr/local/bin/arena-uninstall ];then
-        ${sudo_prefix} rm -rf /usr/local/bin/arena-uninstall
-    fi
     ${sudo_prefix} cp $SCRIPT_DIR/bin/arena-uninstall /usr/local/bin
     if [ ! -d $SCRIPT_DIR/charts/arena-artifacts ];then
         cp -a $SCRIPT_DIR/arena-artifacts $SCRIPT_DIR/charts
     fi
     # For non-root user, put the charts dir to the home directory
     if [ `id -u` -eq 0 ];then
-        if [ -d "/charts" ]; then
-            mv /charts /charts-$now
-        fi
         cp -r $SCRIPT_DIR/charts /
     else
-        if [ -d "~/charts" ]; then
-            mv ~/charts ~/charts-$now
-        fi
         cp -r $SCRIPT_DIR/charts ~/
     fi
 }
@@ -195,17 +181,6 @@ function check_addons() {
         export HELM_OPTIONS="$HELM_OPTIONS --set $option"
         return
     fi
-}
-
-function apply_crds() {
-    export CRD_VERSION="v1"
-    if arena-kubectl get apiservices v1beta1.apiextensions.k8s.io &> /dev/null;then
-        export CRD_VERSION="v1beta1"
-    fi
-    if [ -d $SCRIPT_DIR/arena-artifacts/crds ];then
-        rm -rf $SCRIPT_DIR/arena-artifacts/crds
-    fi
-    cp -a $SCRIPT_DIR/arena-artifacts/all_crds/$CRD_VERSION $SCRIPT_DIR/arena-artifacts/crds
 }
 
 # annotate crds with annotation helm.sh/resource-policy=keep
@@ -255,16 +230,6 @@ function clean_old_env() {
         arena-kubectl delete crd tfjobs.kubeflow.org
         arena-kubectl create -f ${SCRIPT_DIR}/arena-artifacts/charts/tf-operator/crds
     fi
-    # remove the old kubedl-operator
-    #    if arena-kubectl get deployment,Service,ServiceAccount -n $NAMESPACE | grep kubedl-operator &> /dev/null;then
-    #        arena-kubectl delete deployment kubedl-operator -n $NAMESPACE
-    #        arena-kubectl delete ServiceAccount kubedl-operator -n $NAMESPACE
-    #        arena-kubectl delete crd crons.apps.kubedl.io
-    #        arena-kubectl delete ClusterRole kubedl-operator-role -n $NAMESPACE
-    #        arena-kubectl delete ClusterRoleBinding kubedl-operator-rolebinding -n $NAMESPACE
-    #        arena-kubectl delete Service kubedl-operator -n $NAMESPACE
-    #        arena-kubectl delete ServiceMonitor kubedl-operator -n $NAMESPACE
-    #    fi
     set -e
 }
 function apply_cron() {
@@ -317,7 +282,6 @@ function operators() {
         fi
     fi
     clean_old_env
-    apply_crds
     apply_tf
     apply_pytorch
     apply_mpi

@@ -9,7 +9,7 @@ on:
 
 env:
   IMAGE_REGISTRY: ghcr.io
-  IMAGE_REPOSITORY: ${{ github.repository }}
+  IMAGE_REPOSITORY: chenyi015/arena
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

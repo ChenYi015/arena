@@ -19,7 +19,6 @@ import os
 import json
 
 import tensorflow as tf
-from tensorflow import keras
 
 
 def print_env():
@@ -37,7 +36,45 @@ def print_env():
     print(info)
 
 
+def get_tf_config_info():
+    """Parse TF_CONFIG to determine training topology."""
+    if "TF_CONFIG" not in os.environ:
+        return None, None, None
+
+    tf_config = json.loads(os.environ["TF_CONFIG"])
+    cluster = tf_config.get("cluster", {})
+    task = tf_config.get("task", {})
+
+    has_ps = "ps" in cluster and len(cluster["ps"]) > 0
+    task_type = task.get("type", "worker")
+    task_index = task.get("index", 0)
+
+    return has_ps, task_type, task_index
+
+
 def main():
+    # Parse TF_CONFIG to determine training topology
+    has_ps, task_type, task_index = get_tf_config_info()
+
+    # For PS-Worker mode, parameter servers need to start a server and wait
+    if has_ps and task_type == "ps":
+        print_env()
+        print(f"Task type: {task_type}, Task index: {task_index}")
+        print("This is a parameter server. Starting server...")
+
+        # Create cluster resolver and start server
+        cluster_resolver = tf.distribute.cluster_resolver.TFConfigClusterResolver()
+        server = tf.distribute.Server(
+            cluster_resolver.cluster_spec(),
+            job_name=task_type,
+            task_index=task_index,
+            protocol="grpc"
+        )
+        print(
+            f"Parameter server {task_index} started, waiting for termination...")
+        server.join()
+        return
+
     parser = argparse.ArgumentParser(description="TensorFlow MNIST Example")
     parser.add_argument(
         "--data",
@@ -121,12 +158,25 @@ def main():
     args = parser.parse_args()
     print_env()
 
-    # Setup distributed strategy.
-    if "TF_CONFIG" in os.environ:
-        # Multi-worker distributed training.
-        strategy = tf.distribute.MultiWorkerMirroredStrategy()
-        print(
-            f"Using MultiWorkerMirroredStrategy with {strategy.num_replicas_in_sync} replicas.")
+    # Setup distributed strategy based on TF_CONFIG topology.
+    use_ps_strategy = False
+    if has_ps is not None:  # TF_CONFIG is set
+        if has_ps:
+            # PS-Worker distributed training mode (worker node).
+            print(f"Task type: {task_type}, Task index: {task_index}")
+            print("Using ParameterServerStrategy for PS-Worker mode.")
+            cluster_resolver = tf.distribute.cluster_resolver.TFConfigClusterResolver()
+            strategy = tf.distribute.experimental.ParameterServerStrategy(
+                cluster_resolver)
+            use_ps_strategy = True
+            print(
+                f"ParameterServerStrategy initialized for worker {task_index}.")
+        else:
+            # Multi-worker training without parameter servers (all workers).
+            print("Using MultiWorkerMirroredStrategy for multi-worker mode.")
+            strategy = tf.distribute.MultiWorkerMirroredStrategy()
+            print(
+                f"Using MultiWorkerMirroredStrategy with {strategy.num_replicas_in_sync} replicas.")
     elif not args.no_cuda and len(tf.config.list_physical_devices("GPU")) > 0:
         # Single-worker multi-GPU training.
         strategy = tf.distribute.MirroredStrategy()
@@ -140,21 +190,31 @@ def main():
     tf.random.set_seed(args.seed)
 
     # Load MNIST dataset.
-    (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data(path=args.data)
+    (x_train, y_train), (x_test,
+                         y_test) = tf.keras.datasets.mnist.load_data(path=args.data)
     train_size, test_size = len(x_train), len(x_test)
 
-    # Preprocess and create train/test dataset.
-    train_dataset = (
-        tf.data.Dataset.from_tensor_slices((x_train, y_train))
-        .map(lambda x, y: (tf.expand_dims(tf.cast(x, tf.float32) / 255.0, -1), y))
-        .shuffle(train_size)
-        .batch(args.batch_size)
-    )
-    test_dataset = (
-        tf.data.Dataset.from_tensor_slices((x_test, y_test))
-        .map(lambda x, y: (tf.expand_dims(tf.cast(x, tf.float32) / 255.0, -1), y))
-        .batch(args.test_batch_size)
-    )
+    # Dataset creation function for PS-Worker mode
+    def make_dataset(is_training=True):
+        if is_training:
+            dataset = (
+                tf.data.Dataset.from_tensor_slices((x_train, y_train))
+                .map(lambda x, y: (tf.expand_dims(tf.cast(x, tf.float32) / 255.0, -1), y))
+                .shuffle(train_size)
+                .batch(args.batch_size)
+            )
+        else:
+            dataset = (
+                tf.data.Dataset.from_tensor_slices((x_test, y_test))
+                .map(lambda x, y: (tf.expand_dims(tf.cast(x, tf.float32) / 255.0, -1), y))
+                .batch(args.test_batch_size)
+            )
+        return dataset
+
+    # For non-PS modes, create datasets directly
+    if not use_ps_strategy:
+        train_dataset = make_dataset(is_training=True)
+        test_dataset = make_dataset(is_training=False)
 
     # Create and compile model within strategy scope for distributed training.
     with strategy.scope():
@@ -170,8 +230,9 @@ def main():
 
         # Compile model with loss, optimizer, and metrics.
         model.compile(
-            loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-            optimizer=keras.optimizers.Adadelta(learning_rate=args.lr),
+            loss=tf.keras.losses.SparseCategoricalCrossentropy(
+                from_logits=True),
+            optimizer=tf.keras.optimizers.Adadelta(learning_rate=args.lr),
             metrics=["accuracy"],
         )
 
@@ -180,18 +241,17 @@ def main():
 
     # TensorBoard callback for visualization.
     callbacks.append(
-        keras.callbacks.TensorBoard(log_dir=args.dir, histogram_freq=1)
-
+        tf.keras.callbacks.TensorBoard(log_dir=args.dir, histogram_freq=1)
     )
     # Learning rate scheduler callback.
     callbacks.append(
-        keras.callbacks.LearningRateScheduler(
+        tf.keras.callbacks.LearningRateScheduler(
             lambda epoch, lr: lr * args.gamma
         )
     )
 
     # Custom callback for detailed progress logging.
-    class LoggingCallback(keras.callbacks.Callback):
+    class LoggingCallback(tf.keras.callbacks.Callback):
         """Custom callback to log training progress and test accuracy."""
 
         def __init__(self, log_interval, train_size, test_size, batch_size):
@@ -210,8 +270,10 @@ def main():
         def on_train_batch_end(self, batch, logs=None):
             self.batch_count += 1
             if self.batch_count % self.log_interval == 0:
-                samples_processed = self.batch_count * self.batch_size
-                percentage = 100.0 * samples_processed / self.train_size
+                samples_processed = min(
+                    self.batch_count * self.batch_size, self.train_size)
+                percentage = min(100.0 * samples_processed /
+                                 self.train_size, 100.0)
                 print(
                     f"Train Epoch: {self.epoch + 1} "
                     f"[{samples_processed}/{self.train_size} "
@@ -234,17 +296,94 @@ def main():
     # Early stopping for dry run.
     if args.dry_run:
         callbacks.append(
-            keras.callbacks.EarlyStopping(monitor="loss", patience=0)
+            tf.keras.callbacks.EarlyStopping(monitor="loss", patience=0)
         )
 
     # Train the model.
-    model.fit(
-        train_dataset,
-        epochs=args.epochs,
-        validation_data=test_dataset,
-        callbacks=callbacks,
-        verbose=2 if not args.dry_run else 1
-    )
+    if use_ps_strategy:
+        # PS-Worker training: use ClusterCoordinator API
+        coordinator = tf.distribute.coordinator.ClusterCoordinator(strategy)
+
+        # Create distributed dataset - use a simple callable that returns a dataset
+        def dataset_fn():
+            dataset = (
+                tf.data.Dataset.from_tensor_slices((x_train, y_train))
+                .map(lambda x, y: (tf.expand_dims(tf.cast(x, tf.float32) / 255.0, -1), y))
+                .shuffle(train_size)
+                .batch(args.batch_size)
+                .repeat()
+            )
+            return dataset
+
+        per_worker_dataset = coordinator.create_per_worker_dataset(dataset_fn)
+
+        # Define training step - receives the distributed dataset directly
+        @tf.function
+        def per_worker_step_fn(iterator):
+            def step_fn(batch):
+                x, y = batch
+                with tf.GradientTape() as tape:
+                    predictions = model(x, training=True)
+                    per_example_loss = tf.keras.losses.sparse_categorical_crossentropy(
+                        y, predictions, from_logits=True)
+                    loss = tf.nn.compute_average_loss(per_example_loss)
+                gradients = tape.gradient(loss, model.trainable_variables)
+                model.optimizer.apply_gradients(
+                    zip(gradients, model.trainable_variables))
+                return loss
+
+            per_replica_losses = strategy.run(step_fn, args=(next(iterator),))
+            return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses, axis=None)
+
+        # Train with coordinator
+        print("Starting PS-Worker distributed training...")
+        steps_per_epoch = train_size // args.batch_size
+
+        for epoch in range(args.epochs):
+            print(f"\nEpoch {epoch + 1}/{args.epochs}")
+            total_loss = 0.0
+            num_logged = 0
+
+            for step in range(steps_per_epoch):
+                result = coordinator.schedule(
+                    per_worker_step_fn, args=(per_worker_dataset,))
+
+                if (step + 1) % args.log_interval == 0:
+                    coordinator.join()
+                    loss_value = result.fetch()
+                    total_loss += loss_value
+                    num_logged += 1
+                    samples_processed = min(
+                        (step + 1) * args.batch_size, train_size)
+                    percentage = min(
+                        100.0 * samples_processed / train_size, 100.0)
+                    print(
+                        f"Train Epoch: {epoch + 1} "
+                        f"[{samples_processed}/{train_size} ({percentage:.0f}%)]\t"
+                        f"Loss: {loss_value:.6f}"
+                    )
+
+            coordinator.join()
+            avg_loss = total_loss / max(num_logged, 1)
+            print(f"Epoch {epoch + 1} completed. Average Loss: {avg_loss:.6f}")
+
+            # Apply learning rate decay
+            current_lr = model.optimizer.learning_rate.numpy()
+            model.optimizer.learning_rate.assign(current_lr * args.gamma)
+
+            if args.dry_run:
+                break
+
+        print("PS-Worker training completed.")
+    else:
+        # MultiWorkerMirrored or single device training
+        model.fit(
+            train_dataset,
+            epochs=args.epochs,
+            validation_data=test_dataset,
+            callbacks=callbacks,
+            verbose=2 if not args.dry_run else 1
+        )
 
     # Save the model.
     if args.save_model:

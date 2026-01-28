@@ -34,20 +34,32 @@ var (
 
 // Version contains Arena version information
 type Version struct {
-	Version      string
-	BuildDate    string
-	GitCommit    string
-	GitTag       string
-	GitTreeState string
-	GoVersion    string
-	Compiler     string
-	Platform     string
-	ChartsInfo   ChartsInfo
+	Version         string
+	BuildDate       string
+	GitCommit       string
+	GitTag          string
+	GitTreeState    string
+	GoVersion       string
+	Compiler        string
+	Platform        string
+	ChartsInfo      ChartsInfo
+	CRDVersions     map[string]string
+	OperatorVersion map[string]string
 }
 
 type ChartsInfo struct {
 	ChartsVersion map[string]string
 	ChartsHome    string
+}
+
+// CRDInfo contains CRD version information
+type CRDInfo struct {
+	CRDVersions map[string]string
+}
+
+// OperatorInfo contains operator deployment version information
+type OperatorInfo struct {
+	OperatorVersion map[string]string
 }
 
 func (v Version) String() string {
@@ -75,15 +87,17 @@ func GetVersion() Version {
 		}
 	}
 	return Version{
-		Version:      versionStr,
-		BuildDate:    buildDate,
-		GitCommit:    gitCommit,
-		GitTag:       gitTag,
-		GitTreeState: gitTreeState,
-		GoVersion:    runtime.Version(),
-		Compiler:     runtime.Compiler,
-		Platform:     fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
-		ChartsInfo:   getChartsInfo(),
+		Version:         versionStr,
+		BuildDate:       buildDate,
+		GitCommit:       gitCommit,
+		GitTag:          gitTag,
+		GitTreeState:    gitTreeState,
+		GoVersion:       runtime.Version(),
+		Compiler:        runtime.Compiler,
+		Platform:        fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
+		ChartsInfo:      getChartsInfo(),
+		CRDVersions:     getCRDVersions(),
+		OperatorVersion: getOperatorVersions(),
 	}
 }
 

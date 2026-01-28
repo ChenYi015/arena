@@ -17,6 +17,7 @@ package arenaclient
 import (
 	"fmt"
 
+	"github.com/kubeflow/arena"
 	"github.com/kubeflow/arena/pkg/apis/config"
 	"github.com/kubeflow/arena/pkg/apis/types"
 	"github.com/kubeflow/arena/pkg/apis/utils"
@@ -64,6 +65,8 @@ func NewArenaClient(args types.ArenaClientArgs) (*ArenaClient, error) {
 	if err := k8saccesser.InitK8sResourceAccesser(configer.GetRestConfig(), configer.GetClientSet(), configer.IsDaemonMode()); err != nil {
 		return client, err
 	}
+	// Initialize cluster info for version command
+	arena.InitClusterInfo(configer.GetClientSet(), configer.GetAPIExtensionClientSet())
 	client.arenaConfiger = configer
 	// the namespace may be updated
 	client.namespace = configer.GetNamespace()

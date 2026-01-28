@@ -46,14 +46,32 @@ func NewVersionCmd(cliName string) *cobra.Command {
 			fmt.Printf("  Platform: %s\n", version.Platform)
 			if verbose {
 				fmt.Printf("  ChartsHome: %s\n", version.ChartsInfo.ChartsHome)
-				fmt.Printf("  ChartsVersion: \n")
+				fmt.Printf("  ChartsVersion:\n")
 				for chartName, chartVersion := range version.ChartsInfo.ChartsVersion {
 					fmt.Printf("    %s: %s\n", chartName, chartVersion)
+				}
+				// Display CRD versions
+				fmt.Printf("  CRDVersions:\n")
+				if len(version.CRDVersions) == 0 {
+					fmt.Printf("    (Run 'arena version -v' with cluster access to see CRD versions)\n")
+				} else {
+					for crdName, crdVersion := range version.CRDVersions {
+						fmt.Printf("    %s: %s\n", crdName, crdVersion)
+					}
+				}
+				// Display operator versions
+				fmt.Printf("  OperatorVersions:\n")
+				if len(version.OperatorVersion) == 0 {
+					fmt.Printf("    (Run 'arena version -v' with cluster access to see operator versions)\n")
+				} else {
+					for operatorType, operatorVersion := range version.OperatorVersion {
+						fmt.Printf("    %s: %s\n", operatorType, operatorVersion)
+					}
 				}
 			}
 		},
 	}
 	versionCmd.Flags().BoolVar(&short, "short", false, "print just the version number")
-	versionCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "print the supported charts version number")
+	versionCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "print the supported charts version number, CRD versions, and operator versions deployed in cluster")
 	return &versionCmd
 }
